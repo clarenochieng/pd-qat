@@ -280,7 +280,7 @@ def forward(data_loader, model, criterion, criterion_soft, epoch, args, training
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training')
-    parser.add_argument('--results-dir', default='./results', help='results dir')   
+    parser.add_argument('--results-dir', default='./results', help='results dir') 
     parser.add_argument('--dataset', default='cifar10', help='dataset name or folder')
     parser.add_argument('--train_split', default='train', help='train split name')
     parser.add_argument('--model', default='resnet20q', help='model architecture')
@@ -301,6 +301,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval_constraint',  action='store_true')
     parser.add_argument('--project',  default='Baselines', type=str, help='wandb Project name')
     parser.add_argument('--seed', default=42, type=int)
+    parser.add_argument('--layer_quant_bit_width_list', default=None, help='bit widths for all layers in model')
     args = parser.parse_args()
     seed_everything(args.seed)
     main(args)
