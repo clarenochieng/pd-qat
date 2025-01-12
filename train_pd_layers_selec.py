@@ -52,6 +52,8 @@ parser.add_argument('--project',  default='ConQAT', type=str, help='wandb Projec
 parser.add_argument('--epsilonlw', default=1/(2**8-1), type = float, help='layer constraint tightness')
 parser.add_argument('--seed', default=42, type=int)
 parser.add_argument('--no_quant_layers', default=None, help='list of layers that will not be quantised')
+#added
+parser.add_argument('--layer_quant_bit_width_list', default=None, help='bit widths for all layers in model')
 args = parser.parse_args()
 
 def main():
@@ -61,7 +63,8 @@ def main():
     #   LOGGING
     #####################
     if args.wandb_log:
-        wandb.init(project=args.project, entity="alelab", name=args.results_dir.split('/')[-1])
+        #wandb.init(project=args.project, entity="ogira", name=args.results_dir.split('/')[-1])
+        wandb.init(project="pdqat", entity="ogira", name=args.results_dir.split('/')[-1])
         wandb.config.update(args)
     hostname = socket.gethostname()
     setup_logging(os.path.join(args.results_dir, 'log_{}.txt'.format(hostname)))
@@ -119,6 +122,13 @@ def main():
         print("Unquantised Layers", args.no_quant_layers)
         print("Layer idxs: :",  no_quant_list)
         print("*"*20)
+
+    #quantized layer list
+    if args.layer_quant_bit_width_list is not None:
+        layer_quant_bit_width_list = [lambda m: int(m) for m in args.layer_quant_bit_width_list.split(',')]
+        print("*"*20)
+        print("Number of quantized layers is: ", len(layer_quant_bit_width_list))
+        print("*"*20)
     lr_decay = list(map(int, args.lr_decay.split(',')))
     optimizer = get_optimizer_config(model, args.optimizer, args.lr, args.weight_decay)
     lr_scheduler = None
@@ -175,7 +185,7 @@ def main():
         #######################
         print("Evaluating Model...")              
         model.eval()
-        val_loss, val_prec1, val_prec5, slack_val = forward(val_loader, model, lambdas, criterion, criterion_soft, epoch, False, bit_width_list=bit_width_list,constraint_norm=norm_func,epsilon=epsilon)
+        val_loss, val_prec1, val_prec5, slack_val = forward(val_loader, model, lambdas, criterion, criterion_soft, epoch, False, bit_width_list=bit_width_list,constraint_norm=norm_func,epsilon=epsilon, bit_width_list=bit_width_list, no_quant_layer_list=no_quant_layer_list, layer_quant_bit_width_list=layer_quant_bit_width_list)
         test_loss, test_prec1, test_prec5, _ = forward(test_loader, model, lambdas, criterion, criterion_soft, epoch, False, bit_width_list=bit_width_list,constraint_norm=norm_func,epsilon=epsilon, eval_slacks=False)
         if isinstance(lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             lr_scheduler.step(val_loss)
@@ -223,7 +233,8 @@ def main():
 
 def forward(data_loader, model, lambdas, criterion,criterion_soft, epoch, training=True, 
              optimizer=None, train_bn=True, epsilon=None, 
-             bit_width_list = None, constraint_norm=torch.square, eval_slacks=True, no_quant_layer_list=[]):
+             bit_width_list = None, constraint_norm=torch.square, eval_slacks=True, no_quant_layer_list=[],
+             layer_quant_bit_width_list=None):
     stats_keys = []
     for key in model.state_dict().keys():
         if "mean" in key or "var" in key:
@@ -255,14 +266,35 @@ def forward(data_loader, model, lambdas, criterion,criterion_soft, epoch, traini
             loss = criterion(out_full, target)
             # Evaluate slack
             # We exlude the highest precision (bit_width_list[:-1]) 
-            for j, bitwidth in enumerate(bit_width_list[:-1]):
-                model.apply(lambda m: setattr(m, 'wbit', bitwidth))
-                model.apply(lambda m: setattr(m, 'abit', bitwidth)) 
-                # Keep some layers in FP
-                for l in no_quant_layer_list:
+
+            '''
+            #should be passed as an input parameter
+            layer_quant_bit_width_list = [b_1, b_2, ..., b_n]
+            for idx, l in enumerate(quant_layer_list):
+            #or just in layers if possible, instead of quant_layer_list
+                layer = model.get_layer(l)
+                layer.apply(lambda m: setattr(m, 'wbit', layer_quant_bit_width_list[idx]))
+                layer.apply(lambda m: setattr(m, 'abit', layer_quant_bit_width_list[idx]))
+            '''
+
+            for j, bitwidth in enumerate(bit_width_list[-1:]):
+            #for j, bitwidth in enumerate(bit_width_list[:-1]):
+                # model.apply(lambda m: setattr(m, 'wbit', bitwidth))
+                # model.apply(lambda m: setattr(m, 'abit', bitwidth)) 
+                # # Keep some layers in FP
+                # for l in no_quant_layer_list:
+                #     layer = model.get_layer(l)
+                #     layer.apply(lambda m: setattr(m, 'wbit', 32))
+                #     layer.apply(lambda m: setattr(m, 'abit', 32))
+
+                model.apply(lambda m: setattr(m, 'wbit', 32))
+                model.apply(lambda m: setattr(m, 'abit', 32)) 
+
+                for idx, bitwidth in enumerate(layer_quant_bit_width_list):
+                    l = idx + 1
                     layer = model.get_layer(l)
-                    layer.apply(lambda m: setattr(m, 'wbit', 32))
-                    layer.apply(lambda m: setattr(m, 'abit', 32))
+                    layer.apply(lambda m: setattr(m, 'wbit', layer_quant_bit_width_list[idx]))
+                    layer.apply(lambda m: setattr(m, 'abit', layer_quant_bit_width_list[idx]))
                 # low precision clone to compute grads
                 model_q = copy.deepcopy(model)
                 # Update low precision bnorm stats in main model
@@ -313,10 +345,15 @@ def forward(data_loader, model, lambdas, criterion,criterion_soft, epoch, traini
                 for bw, am_l, am_t1, am_t5, slm in zip(bit_width_list, losses, top1, top5, slack_meter):
                     model.apply(lambda m: setattr(m, 'wbit', bw))
                     model.apply(lambda m: setattr(m, 'abit', bw))
-                    for l in no_quant_layer_list:
+                    # for l in no_quant_layer_list:
+                    #     layer = model.get_layer(l)
+                    #     layer.apply(lambda m: setattr(m, 'wbit', 32))
+                    #     layer.apply(lambda m: setattr(m, 'abit', 32))
+                    for idx, bitwidth in enumerate(layer_quant_bit_width_list):
+                        l = idx + 1
                         layer = model.get_layer(l)
-                        layer.apply(lambda m: setattr(m, 'wbit', 32))
-                        layer.apply(lambda m: setattr(m, 'abit', 32))
+                        layer.apply(lambda m: setattr(m, 'wbit', layer_quant_bit_width_list[idx]))
+                        layer.apply(lambda m: setattr(m, 'abit', layer_quant_bit_width_list[idx]))
                     # compute activations with Low precision model
                     zq_for_hp, zq_for_const, output = model.get_activations(input)
                     # Log Loss and acc
@@ -344,10 +381,15 @@ def forward(data_loader, model, lambdas, criterion,criterion_soft, epoch, traini
                 for bw, am_l, am_t1, am_t5 in zip(bit_width_list, losses, top1, top5):
                     model.apply(lambda m: setattr(m, 'wbit', bw))
                     model.apply(lambda m: setattr(m, 'abit', bw))
-                    for l in no_quant_layer_list:
+                    # for l in no_quant_layer_list:
+                    #     layer = model.get_layer(l)
+                    #     layer.apply(lambda m: setattr(m, 'wbit', 32))
+                    #     layer.apply(lambda m: setattr(m, 'abit', 32))
+                    for idx, bitwidth in enumerate(layer_quant_bit_width_list):
+                        l = idx + 1
                         layer = model.get_layer(l)
-                        layer.apply(lambda m: setattr(m, 'wbit', 32))
-                        layer.apply(lambda m: setattr(m, 'abit', 32))
+                        layer.apply(lambda m: setattr(m, 'wbit', layer_quant_bit_width_list[idx]))
+                        layer.apply(lambda m: setattr(m, 'abit', layer_quant_bit_width_list[idx]))
                     # compute activations with Low precision model
                     zq_for_hp, zq_for_const, output = model.get_activations(input)
                     # Log Loss and acc
@@ -378,10 +420,16 @@ def forward(data_loader, model, lambdas, criterion,criterion_soft, epoch, traini
                 for bw_idx, bitwidth in enumerate(bit_width_list[:-1]):
                     model.apply(lambda m: setattr(m, 'wbit', bitwidth))
                     model.apply(lambda m: setattr(m, 'abit', bitwidth))
-                    for l in no_quant_layer_list:
+                    # for l in no_quant_layer_list:
+                    #     layer = model.get_layer(l)
+                    #     layer.apply(lambda m: setattr(m, 'wbit', 32))
+                    #     layer.apply(lambda m: setattr(m, 'abit', 32))
+
+                    for idx, bitwidth in enumerate(layer_quant_bit_width_list):
+                        l = idx + 1
                         layer = model.get_layer(l)
-                        layer.apply(lambda m: setattr(m, 'wbit', 32))
-                        layer.apply(lambda m: setattr(m, 'abit', 32))
+                        layer.apply(lambda m: setattr(m, 'wbit', layer_quant_bit_width_list[idx]))
+                        layer.apply(lambda m: setattr(m, 'abit', layer_quant_bit_width_list[idx]))
                     # Compute forward
                     zq_for_hp, zq_for_const, outputs_q = model.get_activations(input)
                     # Compute and log loss and acc

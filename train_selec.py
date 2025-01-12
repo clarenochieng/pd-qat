@@ -37,7 +37,13 @@ def seed_everything(seed: int):
 
 def main(args):
     if args.wandb_log:
-        wandb.init(project=args.project, entity="alelab", name=args.results_dir.split('/')[-1])
+        #wandb.init(project=args.project, entity="ogira", name=args.results_dir.split('/')[-1])
+        wandb.init(project="pdqat", config={
+            "learning_rate": 0.02,
+            "architecture": "CNN",
+            "dataset": "CIFAR-100",
+            "epochs": 10,
+            })
         wandb.config.update(args)
     hostname = socket.gethostname()
     setup_logging(os.path.join(args.results_dir, 'log_{}.txt'.format(hostname)))

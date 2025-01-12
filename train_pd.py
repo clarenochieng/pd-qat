@@ -91,7 +91,7 @@ def main():
     #   LOGGING
     #####################
     if args.wandb_log:
-        wandb.init(project=args.project, entity="alelab", name=args.results_dir.split('/')[-1])
+        wandb.init(project=args.project, entity="ogira", name=args.results_dir.split('/')[-1])
         wandb.config.update(args)
     hostname = socket.gethostname()
     setup_logging(os.path.join(args.results_dir, 'log_{}.txt'.format(hostname)))
